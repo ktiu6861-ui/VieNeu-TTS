@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "giong-viet"
+version = "0.1.0"
+description = "Desktop Vietnamese text-to-speech studio powered by VieNeu-TTS"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "PySide6>=6.8,<7",
+    "vieneu>=3.8.3,<4",
+    "onnxruntime==1.24.4",
+    "numpy==2.2.6",
+]
+
+[project.optional-dependencies]
+build = ["pyinstaller>=6.11,<7"]
+
+[project.scripts]
+giong-viet = "main:main"
+
+[tool.setuptools]
+py-modules = ["main"]

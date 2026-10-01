@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+*.pyc
+
+cache/
+work/
+outputs/
+logs/
+
+*.wav
+*.mp3
+*.flac
+*.m4a
+
+# Nếu voice JSON là giọng clone cá nhân thì không upload
+voices/
+
+.env

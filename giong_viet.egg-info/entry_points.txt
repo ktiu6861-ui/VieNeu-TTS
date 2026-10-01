@@ -1,0 +1,2 @@
+[console_scripts]
+giong-viet = main:main
