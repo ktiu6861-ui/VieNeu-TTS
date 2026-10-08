@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "giong-viet"
-version = "0.1.0"
+version = "0.1.2"
 description = "Desktop Vietnamese text-to-speech studio powered by VieNeu-TTS"
 requires-python = ">=3.11,<3.14"
 dependencies = [
@@ -12,6 +12,7 @@ dependencies = [
     "vieneu>=3.8.3,<4",
     "onnxruntime==1.24.4",
     "numpy==2.2.6",
+    "lameenc>=1.8,<2",
 ]
 
 [project.optional-dependencies]
@@ -21,4 +22,4 @@ build = ["pyinstaller>=6.11,<7"]
 giong-viet = "main:main"
 
 [tool.setuptools]
-py-modules = ["main"]
+py-modules = ["main", "updater"]

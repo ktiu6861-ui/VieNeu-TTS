@@ -19,6 +19,7 @@ analysis = Analysis(
         "onnxruntime",
         "onnxruntime.capi",
         "onnxruntime.capi.onnxruntime_pybind11_state",
+        "lameenc",
     ],
     hookspath=[],
     hooksconfig={},

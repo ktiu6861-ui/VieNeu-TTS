@@ -1,5 +1,6 @@
 README.md
 main.py
+updater.py
 pyproject.toml
 giong_viet.egg-info/PKG-INFO
 giong_viet.egg-info/SOURCES.txt
@@ -7,3 +8,5 @@ giong_viet.egg-info/dependency_links.txt
 giong_viet.egg-info/entry_points.txt
 giong_viet.egg-info/requires.txt
 giong_viet.egg-info/top_level.txt
+tests/test_text_file_loader.py
+tests/test_updater.py

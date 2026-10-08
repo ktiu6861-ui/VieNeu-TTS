@@ -6,8 +6,8 @@
 
 - 25 giọng dựng sẵn của VieNeu-TTS, hỗ trợ tiếng Việt và tiếng Anh.
 - Clone giọng từ clip WAV ngắn; giọng và clip mẫu được lưu trong thư mục dữ liệu riêng của ứng dụng để dùng lại ở lần sau.
-- Tạo file WAV, nghe thử ngay trong ứng dụng và mở thư mục kết quả.
-- Chạy VieNeu bằng ONNX trên CPU, không cần GPU.
+- Tạo file MP3 192 kbps, nghe thử ngay trong ứng dụng và mở thư mục kết quả.
+- Chạy VieNeu v3 Turbo bằng ONNX trên CPU, ưu tiên graph INT8 và tự dùng FP32 nếu graph INT8 chưa có trong cache. Số luồng CPU được tự cân theo máy (tối đa 12).
 
 Chỉ clone giọng của bạn hoặc giọng bạn được phép sử dụng. Clip mẫu WAV sạch, khoảng 3–8 giây, thường cho kết quả tốt hơn.
 
@@ -34,7 +34,7 @@ Gói portable được tạo tại `dist/offline-build/GiongViet/`; ZIP64 đầy
 
 ## Dữ liệu
 
-Với bản portable, giọng clone và file WAV đầu ra được lưu trong `GiongViet/user-data/` cạnh ứng dụng để đi cùng thư mục khi sao chép. Khi tạo ZIP, các giọng clone đang có trong `%LOCALAPPDATA%\GiongViet\GiongViet\` trên máy build cũng được đưa vào gói. Bản chạy từ mã nguồn tiếp tục lưu dữ liệu trong `%LOCALAPPDATA%\GiongViet\GiongViet\`. Model được cache theo cơ chế của Hugging Face.
+Với bản portable, giọng clone và file MP3 đầu ra được lưu trong `GiongViet/user-data/` cạnh ứng dụng để đi cùng thư mục khi sao chép. Khi tạo ZIP, các giọng clone đang có trong `%LOCALAPPDATA%\GiongViet\GiongViet\` trên máy build cũng được đưa vào gói. Bản chạy từ mã nguồn tiếp tục lưu dữ liệu trong `%LOCALAPPDATA%\GiongViet\GiongViet\`. Model và graph INT8 được cache theo cơ chế của Hugging Face; cache giọng clone tiếp tục được nạp lại khi mở ứng dụng. File MP3 đầu ra được lưu trong thư mục `outputs`.
 
 ## Nền tảng
 

@@ -2,6 +2,7 @@ PySide6<7,>=6.8
 vieneu<4,>=3.8.3
 onnxruntime==1.24.4
 numpy==2.2.6
+lameenc<2,>=1.8
 
 [build]
 pyinstaller<7,>=6.11

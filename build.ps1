@@ -24,6 +24,9 @@ try {
 
 	& $python scripts/package_portable.py
 	if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+	& $python scripts/package_update.py
+	if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 	Write-Host "Created $archive and $distPath/GiongViet/GiongViet.exe"
 }
 finally {

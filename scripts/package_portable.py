@@ -7,6 +7,8 @@ import sys
 import zipfile
 from pathlib import Path
 
+REQUIRED_CLONE_VOICES = {"ban mai", "bích ngọc"}
+
 
 def copy_clone_voices(source_data: Path, target_data: Path) -> int:
     index_path = source_data / "voices.json"
@@ -31,6 +33,19 @@ def copy_clone_voices(source_data: Path, target_data: Path) -> int:
         target_voices.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source_audio, target_voices / filename)
         copied_items.append(item)
+
+    copied_names = {
+        item["name"].strip().casefold()
+        for item in copied_items
+        if isinstance(item.get("name"), str)
+    }
+    missing = REQUIRED_CLONE_VOICES - copied_names
+    if missing:
+        names = ", ".join(sorted(missing))
+        raise ValueError(
+            f"Required cloned voices are missing or incomplete: {names}. "
+            f"Check {index_path} and its voices directory before building."
+        )
 
     if copied_items:
         target_data.mkdir(parents=True, exist_ok=True)
@@ -61,19 +76,21 @@ def main() -> int:
         return 1
 
     archive.parent.mkdir(parents=True, exist_ok=True)
-    archive.unlink(missing_ok=True)
+    temporary_archive = archive.with_suffix(".zip.tmp")
+    temporary_archive.unlink(missing_ok=True)
     files = [path for path in bundle.rglob("*") if path.is_file()]
     total_bytes = sum(path.stat().st_size for path in files)
     print(f"Creating ZIP64 archive: {len(files)} files, {total_bytes / (1024 ** 3):.2f} GiB...")
 
-    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as package:
+    with zipfile.ZipFile(temporary_archive, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as package:
         for path in files:
             package.write(path, Path("GiongViet") / path.relative_to(bundle))
 
-    with zipfile.ZipFile(archive) as package:
+    with zipfile.ZipFile(temporary_archive) as package:
         bad_file = package.testzip()
         if bad_file:
             raise RuntimeError(f"ZIP CRC validation failed for {bad_file}")
+    temporary_archive.replace(archive)
 
     print(f"PORTABLE_ZIP_OK: {archive} ({archive.stat().st_size / (1024 ** 3):.2f} GiB)")
     print(f"Packaged cloned voices: {voice_count}")

@@ -1,5 +1,7 @@
 .venv/
 .venv-build/
+.cache/
+outputs/
 __pycache__/
 *.py[cod]
 build/
