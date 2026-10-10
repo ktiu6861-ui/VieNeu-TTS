@@ -10,3 +10,17 @@ Khi phát hành phiên bản:
 4. Đính kèm hai tệp `GiongViet-update-windows-x64.zip` và `GiongViet-update-manifest.json` từ `dist/` vào release rồi xuất bản.
 
 Người dùng đang có bản portable chỉ cần bấm **Cập nhật phiên bản mới**. ZIP portable đầy đủ vẫn dùng cho lần cài mới; gói cập nhật nhỏ hơn không chứa model hoặc dữ liệu cá nhân.
+
+
+## Delta update packages
+
+Keep the previous portable bundle. After building the new release, run:
+
+```powershell
+.venv-build/Scripts/python.exe scripts/package_update.py `
+  --bundle dist/offline-build/GiongViet `
+  --base-bundle dist/previous/GiongViet `
+  --base-version 0.1.4
+```
+
+Replace the base path and version with the previous release. Attach the full update ZIP, manifest, and `GiongViet-update-delta-<base-version>.zip` to the release. Delta-aware versions select a matching delta; older clients continue using the full package.

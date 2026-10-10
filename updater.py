@@ -10,7 +10,7 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
-APP_VERSION = "0.1.4"
+APP_VERSION = "0.1.5"
 GITHUB_REPOSITORY = "ktiu6861-ui/VieNeu-TTS"
 UPDATE_ARCHIVE = "GiongViet-update-windows-x64.zip"
 UPDATE_MANIFEST = "GiongViet-update-manifest.json"
@@ -64,16 +64,31 @@ def download_latest_update(progress=None) -> tuple[str, str]:
     expected_hash = manifest.get("sha256", "").lower()
     if version != tag.lstrip("vV") or manifest.get("archive") != UPDATE_ARCHIVE:
         raise ValueError("Thông tin phiên bản trong gói cập nhật không khớp bản phát hành.")
+    archive_name = UPDATE_ARCHIVE
+    deltas = manifest.get("deltas", {})
+    delta = deltas.get(APP_VERSION) if isinstance(deltas, dict) else None
+    if isinstance(delta, dict):
+        delta_name = delta.get("archive")
+        delta_hash = str(delta.get("sha256", "")).lower()
+        if (
+            isinstance(delta_name, str)
+            and Path(delta_name).name == delta_name
+            and delta_name.startswith("GiongViet-update-delta-")
+            and delta_name in assets
+            and re.fullmatch(r"[0-9a-f]{64}", delta_hash)
+        ):
+            archive_name = delta_name
+            expected_hash = delta_hash
     if not re.fullmatch(r"[0-9a-f]{64}", expected_hash):
         raise ValueError("Bản phát hành thiếu mã kiểm tra SHA-256 hợp lệ.")
 
     task_dir = Path(tempfile.mkdtemp(prefix="giong-viet-update-"))
-    archive_path = task_dir / UPDATE_ARCHIVE
+    archive_path = task_dir / archive_name
     digest = hashlib.sha256()
-    total = int(assets[UPDATE_ARCHIVE].get("size", 0))
+    total = int(assets[archive_name].get("size", 0))
     downloaded = 0
     try:
-        with _request(assets[UPDATE_ARCHIVE]["browser_download_url"]) as response:
+        with _request(assets[archive_name]["browser_download_url"]) as response:
             with archive_path.open("wb") as target:
                 while chunk := response.read(1024 * 1024):
                     target.write(chunk)
@@ -105,12 +120,13 @@ def launch_update_installer(archive_path: str, process_id: int) -> None:
         raise FileNotFoundError("Không tìm thấy ứng dụng hoặc gói cập nhật đã tải.")
 
     script = r"""
-param([string]$Archive, [string]$InstallDir, [string]$Executable, [int]$ProcessId)
+param([string]$Archive, [string]$InstallDir, [string]$Executable, [int]$ProcessId, [switch]$Delta)
 $ErrorActionPreference = 'Stop'
 $parent = Split-Path -Parent $InstallDir
 $task = Join-Path $parent ('.GiongViet-update-' + [guid]::NewGuid().ToString('N'))
 $backup = $InstallDir + '.previous-' + [guid]::NewGuid().ToString('N')
 $swapped = $false
+$changes = [System.Collections.Generic.List[object]]::new()
 try {
     while (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) { Start-Sleep -Seconds 1 }
     New-Item -ItemType Directory -Path $task | Out-Null
@@ -118,7 +134,32 @@ try {
     [System.IO.Compression.ZipFile]::ExtractToDirectory($Archive, $stage)
     $payload = Join-Path $stage 'GiongViet'
     if (-not (Test-Path (Join-Path $payload 'GiongViet.exe'))) { throw 'Gói cập nhật thiếu GiongViet.exe.' }
-    if (-not (Test-Path (Join-Path $payload '_internal'))) { throw 'Gói cập nhật thiếu runtime.' }
+    if (-not $Delta -and -not (Test-Path (Join-Path $payload '_internal'))) { throw 'Gói cập nhật thiếu runtime.' }
+    if ($Delta) {
+        $backupFiles = Join-Path $task 'backup'
+        $rootPrefix = [System.IO.Path]::GetFullPath($InstallDir).TrimEnd('\') + '\'
+        foreach ($file in Get-ChildItem -LiteralPath $payload -File -Recurse) {
+            $relative = $file.FullName.Substring($payload.Length).TrimStart([char]'\', [char]'/')
+            if ($relative.StartsWith('user-data\', [System.StringComparison]::OrdinalIgnoreCase) -or
+                $relative.StartsWith('_internal\hf-cache\', [System.StringComparison]::OrdinalIgnoreCase) -or
+                ([regex]::Split($relative, '[\\/]') -contains '..')) { throw 'Delta package contains protected or invalid paths.' }
+            $target = [System.IO.Path]::GetFullPath((Join-Path $InstallDir $relative))
+            if (-not $target.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) { throw 'Delta path escaped the install directory.' }
+            $backupFile = Join-Path $backupFiles $relative
+            $hadOld = Test-Path -LiteralPath $target
+            $changes.Add([pscustomobject]@{ Relative = $relative; HadOld = $hadOld })
+            New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
+            if ($hadOld) {
+                New-Item -ItemType Directory -Path (Split-Path -Parent $backupFile) -Force | Out-Null
+                Move-Item -LiteralPath $target -Destination $backupFile
+            }
+            Move-Item -LiteralPath $file.FullName -Destination $target
+        }
+        Start-Process -FilePath $Executable
+        Remove-Item -LiteralPath $task -Recurse -Force
+        Remove-Item -LiteralPath $Archive -Force
+        exit 0
+    }
     Move-Item -LiteralPath $InstallDir -Destination $backup
     $oldData = Join-Path $backup 'user-data'
     if (Test-Path $oldData) { Move-Item -LiteralPath $oldData -Destination (Join-Path $payload 'user-data') }
@@ -135,7 +176,21 @@ try {
     Remove-Item -LiteralPath $task -Recurse -Force
     Remove-Item -LiteralPath $Archive -Force
 } catch {
-    if (-not $swapped -and (Test-Path $backup) -and -not (Test-Path $InstallDir)) {
+    if ($Delta) {
+        for ($i = $changes.Count - 1; $i -ge 0; $i--) {
+            $change = $changes[$i]
+            $target = Join-Path $InstallDir $change.Relative
+            $backupFile = Join-Path (Join-Path $task 'backup') $change.Relative
+            if (Test-Path -LiteralPath $backupFile) {
+                if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Force }
+                New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
+                Move-Item -LiteralPath $backupFile -Destination $target
+            } elseif (-not $change.HadOld -and (Test-Path -LiteralPath $target)) {
+                Remove-Item -LiteralPath $target -Force
+            }
+        }
+        if (Test-Path -LiteralPath $Executable) { Start-Process -FilePath $Executable }
+    } elseif (-not $swapped -and (Test-Path $backup) -and -not (Test-Path $InstallDir)) {
         $payload = Join-Path $task 'stage\GiongViet'
         $stagedData = Join-Path $payload 'user-data'
         if ((Test-Path $stagedData) -and -not (Test-Path (Join-Path $backup 'user-data'))) {
@@ -160,25 +215,28 @@ try {
     flags = getattr(subprocess, "DETACHED_PROCESS", 0x00000008) | getattr(
         subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200
     )
+    arguments = [
+        powershell,
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-WindowStyle",
+        "Hidden",
+        "-File",
+        str(script_path),
+        "-Archive",
+        str(archive),
+        "-InstallDir",
+        str(install_dir),
+        "-Executable",
+        str(executable),
+        "-ProcessId",
+        str(process_id),
+    ]
+    if archive.name.startswith("GiongViet-update-delta-"):
+        arguments.append("-Delta")
     subprocess.Popen(
-        [
-            powershell,
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-WindowStyle",
-            "Hidden",
-            "-File",
-            str(script_path),
-            "-Archive",
-            str(archive),
-            "-InstallDir",
-            str(install_dir),
-            "-Executable",
-            str(executable),
-            "-ProcessId",
-            str(process_id),
-        ],
+        arguments,
         close_fds=True,
         creationflags=flags,
     )
