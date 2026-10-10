@@ -354,6 +354,7 @@ class MainWindow(QMainWindow):
         self.data_dir = app_data_dir()
         self.default_output_dir = self.data_dir / "outputs"
         self.output_dir = self._load_output_dir()
+        self.queue_output_dir = self._load_queue_output_dir()
         self.render_seconds_per_char = self._load_render_speed_estimate()
         self.playback_rate = self._load_playback_rate()
         self._render_started_at: float | None = None
@@ -594,6 +595,24 @@ class MainWindow(QMainWindow):
         self.queue_list.setMaximumHeight(150)
         side.addWidget(self.queue_list)
 
+        queue_folder_label = QLabel("THƯ MỤC LƯU HÀNG CHỜ")
+        queue_folder_label.setObjectName("queueTitle")
+        side.addWidget(queue_folder_label)
+        queue_folder_row = QHBoxLayout()
+        queue_folder_row.setSpacing(4)
+        self.queue_output_path_edit = QLineEdit(str(self.queue_output_dir))
+        self.queue_output_path_edit.setFixedHeight(30)
+        self.queue_output_path_edit.setPlaceholderText("Đường dẫn lưu audio hàng chờ")
+        self.queue_output_path_edit.setToolTip(str(self.queue_output_dir))
+        self.queue_output_path_edit.editingFinished.connect(self._apply_queue_output_dir_edit)
+        queue_folder_row.addWidget(self.queue_output_path_edit, 1)
+        self.choose_queue_output_button = QPushButton("Chọn")
+        self.choose_queue_output_button.setFixedHeight(30)
+        self.choose_queue_output_button.setToolTip("Chọn thư mục lưu riêng cho hàng chờ")
+        self.choose_queue_output_button.clicked.connect(self._choose_queue_output_dir)
+        queue_folder_row.addWidget(self.choose_queue_output_button)
+        side.addLayout(queue_folder_row)
+
         self.add_queue_button = QPushButton("Thêm nội dung hiện tại")
         self.add_queue_button.setObjectName("queueAction")
         self.add_queue_button.clicked.connect(self._add_to_queue)
@@ -831,7 +850,8 @@ class MainWindow(QMainWindow):
         self.render_timer.start()
         self._set_busy(True, "Đang tạo giọng trên máy này…")
         file_name = "" if self._queue_running else self.output_name_edit.text().strip()
-        self.generate_requested.emit(text, voice_id, str(self.output_dir), file_name)
+        target_dir = self.queue_output_dir if self._queue_running else self.output_dir
+        self.generate_requested.emit(text, voice_id, str(target_dir), file_name)
         if file_name:
             self.output_name_edit.clear()
 
@@ -996,6 +1016,55 @@ class MainWindow(QMainWindow):
         self.default_output_dir.mkdir(parents=True, exist_ok=True)
         return self.default_output_dir
 
+    def _load_queue_output_dir(self) -> Path:
+        saved = self._read_settings().get("queue_output_dir")
+        if isinstance(saved, str) and saved.strip():
+            try:
+                output_dir = Path(saved).expanduser()
+                output_dir.mkdir(parents=True, exist_ok=True)
+                return output_dir
+            except (OSError, ValueError):
+                pass
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        return self.output_dir
+
+    def _choose_queue_output_dir(self) -> None:
+        chosen = QFileDialog.getExistingDirectory(
+            self, "Chọn thư mục lưu audio hàng chờ", str(self.queue_output_dir)
+        )
+        if not chosen:
+            return
+        self.queue_output_path_edit.setText(chosen)
+        self._apply_queue_output_dir_edit()
+
+    def _apply_queue_output_dir_edit(self) -> None:
+        path_text = self.queue_output_path_edit.text().strip()
+        if not path_text:
+            self.queue_output_path_edit.setText(str(self.queue_output_dir))
+            return
+        try:
+            output_dir = Path(path_text).expanduser().resolve()
+            output_dir.mkdir(parents=True, exist_ok=True)
+        except (OSError, ValueError) as exc:
+            self.queue_output_path_edit.setText(str(self.queue_output_dir))
+            QMessageBox.warning(
+                self,
+                "Không thể dùng thư mục lưu hàng chờ",
+                f"Không thể tạo hoặc lưu đường dẫn này. Hãy kiểm tra lại đường dẫn và quyền truy cập.\n\n{exc}",
+            )
+            return
+        self.queue_output_dir = output_dir
+        self.queue_output_path_edit.setText(str(output_dir))
+        self.queue_output_path_edit.setToolTip(str(output_dir))
+        try:
+            self._write_settings({"queue_output_dir": str(output_dir)})
+        except OSError as exc:
+            QMessageBox.warning(
+                self,
+                "Không thể ghi cài đặt",
+                f"Thư mục đã dùng được trong phiên này nhưng không thể ghi nhớ cho lần sau.\n\n{exc}",
+            )
+
     def _choose_output_dir(self) -> None:
         chosen = QFileDialog.getExistingDirectory(
             self, "Chọn thư mục lưu audio", str(self.output_dir)
@@ -1033,8 +1102,9 @@ class MainWindow(QMainWindow):
             )
 
     def _open_output_dir(self) -> None:
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.output_dir)))
+        output_dir = Path(self.current_audio).parent if self.current_audio else self.output_dir
+        output_dir.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(output_dir)))
 
     def _choose_clone(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Chọn file giọng mẫu", "", "Audio WAV (*.wav)")
