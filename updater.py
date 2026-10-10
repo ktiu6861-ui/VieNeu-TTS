@@ -10,7 +10,7 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
-APP_VERSION = "0.1.3"
+APP_VERSION = "0.1.4"
 GITHUB_REPOSITORY = "ktiu6861-ui/VieNeu-TTS"
 UPDATE_ARCHIVE = "GiongViet-update-windows-x64.zip"
 UPDATE_MANIFEST = "GiongViet-update-manifest.json"
@@ -30,6 +30,16 @@ def _request(url: str, *, github_api: bool = False):
         headers["Accept"] = "application/vnd.github+json"
         headers["X-GitHub-Api-Version"] = "2022-11-28"
     return urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30)
+
+
+def check_latest_version() -> tuple[str, str]:
+    """Check the latest release without downloading its update package."""
+    with _request(RELEASES_API, github_api=True) as response:
+        release = json.loads(response.read().decode("utf-8"))
+    tag = release.get("tag_name", "")
+    if _version_key(tag) <= _version_key(APP_VERSION):
+        return "current", APP_VERSION
+    return "available", tag.lstrip("vV")
 
 
 def download_latest_update(progress=None) -> tuple[str, str]:

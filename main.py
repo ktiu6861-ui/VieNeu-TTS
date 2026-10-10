@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
     QInputDialog,
 )
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
-from updater import APP_VERSION, download_latest_update, launch_update_installer
+from updater import APP_VERSION, check_latest_version, download_latest_update, launch_update_installer
 
 APP_NAME = "GiongViet"
 DEFAULT_RENDER_SECONDS_PER_CHAR = 0.03
@@ -50,6 +50,10 @@ class UpdateWorker(QThread):
     completed = Signal(str, str, str)
     progress = Signal(int)
 
+    def __init__(self, parent=None, *, check_only: bool = False) -> None:
+        super().__init__(parent)
+        self.check_only = check_only
+
     def _report_progress(self, percent: int) -> None:
         if self.isInterruptionRequested():
             raise InterruptedError("Đã hủy tải bản cập nhật.")
@@ -57,6 +61,10 @@ class UpdateWorker(QThread):
 
     def run(self) -> None:
         try:
+            if self.check_only:
+                status, detail = check_latest_version()
+                self.completed.emit(status, detail, "")
+                return
             result, detail = download_latest_update(self._report_progress)
             if result == "current":
                 self.completed.emit("current", detail, "")
@@ -354,6 +362,7 @@ class MainWindow(QMainWindow):
         self._queue_running = False
         self._queue_items: list[tuple[str, str]] = []
         self.update_worker: UpdateWorker | None = None
+        self._update_install_approved = False
         self.voice_names: set[str] = set()
         self.engine_ready = False
         self.setWindowTitle("Giọng Việt")
@@ -363,6 +372,7 @@ class MainWindow(QMainWindow):
         self._connect_engine()
         self._set_busy(True, "")
         self.thread.start()
+        QTimer.singleShot(2500, lambda: self._check_for_updates(automatic=True))
 
     def _build_ui(self) -> None:
         root = QWidget()
@@ -395,7 +405,7 @@ class MainWindow(QMainWindow):
         self.update_button.clicked.connect(self._check_for_updates)
         side.addWidget(self.update_button)
         side.addStretch(1)
-        privacy = QLabel("CHẠY TRÊN MÁY NÀY\nKhông API · Không gửi dữ liệu")
+        privacy = QLabel("CHẠY TRÊN MÁY NÀY\nKhông gửi nội dung đọc · Có kiểm tra cập nhật online")
         privacy.setObjectName("privacy")
         side.addWidget(privacy)
 
@@ -641,7 +651,9 @@ class MainWindow(QMainWindow):
         self.add_voice_requested.connect(self.worker.add_voice)
         self.remove_voice_requested.connect(self.worker.remove_voice)
 
-    def _check_for_updates(self) -> None:
+    def _check_for_updates(self, automatic: bool = False) -> None:
+        if automatic and not getattr(sys, "frozen", False):
+            return
         if not getattr(sys, "frozen", False):
             QMessageBox.information(
                 self,
@@ -654,7 +666,7 @@ class MainWindow(QMainWindow):
             return
         self.update_button.setEnabled(False)
         self.update_button.setText("Đang kiểm tra cập nhật…")
-        self.update_worker = UpdateWorker(self)
+        self.update_worker = UpdateWorker(self, check_only=automatic)
         self.update_worker.completed.connect(self._update_check_finished)
         self.update_worker.progress.connect(self._update_download_progress)
         self.update_worker.start()
@@ -673,23 +685,42 @@ class MainWindow(QMainWindow):
         self.update_button.setText("Cập nhật phiên bản mới")
 
         if status == "current":
-            QMessageBox.information(self, "Cập nhật phiên bản", detail)
+            self._update_install_approved = False
+            if worker is None or not worker.check_only:
+                QMessageBox.information(self, "Cập nhật phiên bản", "Bạn đang dùng phiên bản mới nhất.")
+            return
+        if status == "available":
+            answer = QMessageBox.question(
+                self,
+                "Đã có phiên bản mới",
+                f"Đã có phiên bản {detail}. Bạn có muốn tải và cài đặt ngay không? "
+                "Giọng clone, model và dữ liệu của bạn sẽ được giữ nguyên.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if answer == QMessageBox.StandardButton.Yes:
+                self._update_install_approved = True
+                self._check_for_updates()
             return
         if status == "error":
-            QMessageBox.warning(self, "Không thể kiểm tra cập nhật", detail)
+            self._update_install_approved = False
+            if worker is None or not worker.check_only:
+                QMessageBox.warning(self, "Không thể kiểm tra cập nhật", detail)
             return
 
-        answer = QMessageBox.question(
-            self,
-            "Đã có phiên bản mới",
-            f"Phiên bản {detail} đã tải về và xác minh thành công.\n\n"
-            "Cập nhật ngay? Ứng dụng sẽ đóng rồi tự mở lại. Giọng clone, model và dữ liệu của bạn được giữ nguyên.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes,
-        )
-        if answer != QMessageBox.StandardButton.Yes:
-            Path(archive_path).unlink(missing_ok=True)
-            return
+        if not self._update_install_approved:
+            answer = QMessageBox.question(
+                self,
+                "Đã có phiên bản mới",
+                f"Phiên bản {detail} đã tải về và xác minh thành công.\n\n"
+                "Cập nhật ngay? Ứng dụng sẽ đóng rồi tự mở lại. Giọng clone, model và dữ liệu của bạn được giữ nguyên.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                Path(archive_path).unlink(missing_ok=True)
+                return
+        self._update_install_approved = False
         try:
             launch_update_installer(archive_path, os.getpid())
         except Exception as exc:
