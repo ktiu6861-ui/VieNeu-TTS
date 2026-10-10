@@ -369,7 +369,8 @@ class MainWindow(QMainWindow):
         self._render_char_count = 0
         self._render_expected_seconds = 0.0
         self._queue_running = False
-        self._queue_items: list[tuple[str, str]] = []
+        self._queue_items: list[tuple[str, str, str, str]] = []
+        self._active_queue_item: tuple[str, str, str, str] | None = None
         self.update_worker: UpdateWorker | None = None
         self._update_install_approved = False
         self.voice_names: set[str] = set()
@@ -392,7 +393,7 @@ class MainWindow(QMainWindow):
 
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(220)
+        sidebar.setFixedWidth(300)
         side = QVBoxLayout(sidebar)
         side.setContentsMargins(22, 24, 16, 20)
         side.setSpacing(10)
@@ -593,7 +594,7 @@ class MainWindow(QMainWindow):
         title.setObjectName("queueTitle")
         heading.addWidget(title)
         heading.addStretch(1)
-        self.queue_count_label = QLabel("0 mục")
+        self.queue_count_label = QLabel("0 mục tiếp theo")
         self.queue_count_label.setObjectName("queueCount")
         heading.addWidget(self.queue_count_label)
         side.addLayout(heading)
@@ -612,6 +613,7 @@ class MainWindow(QMainWindow):
         self.queue_output_path_edit.setFixedHeight(30)
         self.queue_output_path_edit.setPlaceholderText("Đường dẫn lưu audio hàng chờ")
         self.queue_output_path_edit.setToolTip(str(self.queue_output_dir))
+        self.queue_output_path_edit.setCursorPosition(len(str(self.queue_output_dir)))
         self.queue_output_path_edit.editingFinished.connect(self._apply_queue_output_dir_edit)
         queue_folder_row.addWidget(self.queue_output_path_edit, 1)
         self.choose_queue_output_button = QPushButton("Chọn")
@@ -621,16 +623,27 @@ class MainWindow(QMainWindow):
         queue_folder_row.addWidget(self.choose_queue_output_button)
         side.addLayout(queue_folder_row)
 
-        self.add_queue_button = QPushButton("Thêm nội dung hiện tại")
-        self.add_queue_button.setObjectName("queueAction")
-        self.add_queue_button.clicked.connect(self._add_to_queue)
-        side.addWidget(self.add_queue_button)
+        queue_add_row = QHBoxLayout()
+        queue_add_row.setSpacing(6)
+        self.add_queue_content_button = QPushButton("Chọn nội dung")
+        self.add_queue_content_button.setObjectName("queueAction")
+        self.add_queue_content_button.setToolTip("Nhập nội dung sẽ đọc sau tác vụ đang chạy")
+        self.add_queue_content_button.clicked.connect(self._add_queue_content)
+        queue_add_row.addWidget(self.add_queue_content_button, 1)
+        self.add_queue_file_button = QPushButton("Chọn file .txt")
+        self.add_queue_file_button.setObjectName("queueAction")
+        self.add_queue_file_button.setToolTip("Chọn file văn bản sẽ đọc sau tác vụ đang chạy")
+        self.add_queue_file_button.clicked.connect(self._add_queue_file)
+        queue_add_row.addWidget(self.add_queue_file_button, 1)
+        side.addLayout(queue_add_row)
         self.remove_queue_button = QPushButton("Bỏ mục chọn")
         self.remove_queue_button.setObjectName("queueAction")
         self.remove_queue_button.clicked.connect(self._remove_from_queue)
         self.remove_queue_button.setEnabled(False)
         self.queue_list.currentRowChanged.connect(
-            lambda row: self.remove_queue_button.setEnabled(row >= 0 and not self._queue_running)
+            lambda row: self.remove_queue_button.setEnabled(
+                row >= 0 and not self._queue_running and self._render_started_at is None
+            )
         )
         side.addWidget(self.remove_queue_button)
         self.run_queue_button = QPushButton("Đọc hàng chờ")
@@ -801,6 +814,11 @@ class MainWindow(QMainWindow):
     def _engine_failed(self, message: str) -> None:
         self._clear_update_ready_marker()
         self._finish_render_progress(success=False)
+        if self._queue_running and self._active_queue_item is not None:
+            self._queue_items.insert(0, self._active_queue_item)
+            self.queue_list.insertItem(0, self._format_queue_item(1, self._active_queue_item))
+            self._renumber_queue()
+            self._active_queue_item = None
         self._queue_running = False
         if self.engine_ready:
             self._set_busy(False, "Tác vụ thất bại; bạn có thể thử lại.")
@@ -827,7 +845,8 @@ class MainWindow(QMainWindow):
         ready = self.engine_ready and self.voice_combo.count() > 0
         self.generate_button.setEnabled(not busy and ready)
         self.clone_button.setEnabled(not busy and ready)
-        self.add_queue_button.setEnabled(not busy and ready)
+        self.add_queue_content_button.setEnabled(ready)
+        self.add_queue_file_button.setEnabled(ready)
         self.run_queue_button.setEnabled(
             not busy and ready and bool(self._queue_items) and not self._queue_running
         )
@@ -862,7 +881,9 @@ class MainWindow(QMainWindow):
             return
         self._start_generation(text, str(voice_id))
 
-    def _start_generation(self, text: str, voice_id: str) -> None:
+    def _start_generation(
+        self, text: str, voice_id: str, *, queue_file_name: str | None = None
+    ) -> None:
         self._render_char_count = len(text)
         self._render_started_at = time.monotonic()
         self._render_expected_seconds = max(
@@ -872,27 +893,71 @@ class MainWindow(QMainWindow):
         self.render_progress_label.setText("Đang chờ tiến trình render · ETA ước tính…")
         self.render_timer.start()
         self._set_busy(True, "Đang tạo giọng trên máy này…")
-        file_name = "" if self._queue_running else self.output_name_edit.text().strip()
+        file_name = (
+            (queue_file_name or "")
+            if self._queue_running
+            else self.output_name_edit.text().strip()
+        )
         target_dir = self.queue_output_dir if self._queue_running else self.output_dir
         self.generate_requested.emit(text, voice_id, str(target_dir), file_name)
-        if file_name:
+        if file_name and not self._queue_running:
             self.output_name_edit.clear()
 
-    def _add_to_queue(self) -> None:
-        text = self.text_input.toPlainText().strip()
+    def _add_queue_content(self) -> None:
+        text, accepted = QInputDialog.getMultiLineText(
+            self,
+            "Chọn nội dung tiếp theo",
+            "Nhập nội dung sẽ được đọc sau tác vụ hiện tại:",
+        )
+        if not accepted:
+            return
+        self._enqueue_text(text, "Nội dung nhập")
+
+    def _add_queue_file(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Chọn file tiếp theo",
+            "",
+            "File văn bản (*.txt)",
+        )
+        if not path:
+            return
+        try:
+            text = load_text_from_file(path)
+        except Exception as exc:
+            QMessageBox.warning(self, "Không thể thêm file vào hàng chờ", str(exc))
+            return
+        source = Path(path)
+        self._enqueue_text(text, source.name, source.stem)
+
+    def _enqueue_text(self, text: str, source_name: str, output_name: str = "") -> None:
+        text = text.strip()
         voice_id = self.voice_combo.currentData()
         if not text:
             QMessageBox.information(self, "Chưa có nội dung", "Hãy nhập nội dung cần đọc trước.")
             return
         if not voice_id:
             return
-        self._queue_items.append((text, str(voice_id)))
+        item = (text, str(voice_id), source_name, output_name)
+        self._queue_items.append(item)
+        self.queue_list.addItem(self._format_queue_item(len(self._queue_items), item))
+        self.queue_count_label.setText(f"{len(self._queue_items)} mục tiếp theo")
+        self.run_queue_button.setEnabled(
+            not self._queue_running and self.engine_ready and self._render_started_at is None
+        )
+
+    @staticmethod
+    def _format_queue_item(index: int, item: tuple[str, str, str, str]) -> str:
+        text, voice_id, source_name, _ = item
         preview = " ".join(text.split())
-        if len(preview) > 96:
-            preview = preview[:93] + "..."
-        self.queue_list.addItem(f"{len(self._queue_items)}. [{voice_id}] {preview}")
-        self.queue_count_label.setText(f"{len(self._queue_items)} mục")
-        self.run_queue_button.setEnabled(not self._queue_running and self.engine_ready)
+        if len(preview) > 56:
+            preview = preview[:53] + "..."
+        return f"{index}. [{voice_id}] {source_name}: {preview}"
+
+    def _renumber_queue(self) -> None:
+        for index, item in enumerate(self._queue_items, start=1):
+            self.queue_list.item(index - 1).setText(self._format_queue_item(index, item))
+        self.queue_count_label.setText(f"{len(self._queue_items)} mục tiếp theo")
 
     def _remove_from_queue(self) -> None:
         row = self.queue_list.currentRow()
@@ -900,10 +965,7 @@ class MainWindow(QMainWindow):
             return
         self.queue_list.takeItem(row)
         self._queue_items.pop(row)
-        for index in range(self.queue_list.count()):
-            item = self.queue_list.item(index)
-            item.setText(f"{index + 1}. " + item.text().split(". ", 1)[1])
-        self.queue_count_label.setText(f"{len(self._queue_items)} mục")
+        self._renumber_queue()
         self.run_queue_button.setEnabled(bool(self._queue_items) and self.engine_ready)
         self.remove_queue_button.setEnabled(self.queue_list.currentRow() >= 0)
 
@@ -916,11 +978,15 @@ class MainWindow(QMainWindow):
     def _start_queue_item(self) -> None:
         if not self._queue_items:
             self._queue_running = False
-            self._set_busy(False, "HÃ ng chá» Ä‘Ã£ Ä‘á»c xong.")
+            self._set_busy(False, "Đã đọc hết hàng chờ.")
             return
-        text, voice_id = self._queue_items[0]
-        self.queue_list.setCurrentRow(0)
-        self._start_generation(text, voice_id)
+        self._active_queue_item = self._queue_items.pop(0)
+        self.queue_list.takeItem(0)
+        self.queue_list.clearSelection()
+        self.queue_list.setCurrentRow(-1)
+        self._renumber_queue()
+        text, voice_id, _, output_name = self._active_queue_item
+        self._start_generation(text, voice_id, queue_file_name=output_name)
 
     def _update_character_count(self) -> None:
         count = len(self.text_input.toPlainText())
@@ -1175,17 +1241,14 @@ class MainWindow(QMainWindow):
         self.result_label.style().polish(self.result_label)
         self.play_button.setEnabled(True)
         if self._queue_running:
-            if self._queue_items:
-                self._queue_items.pop(0)
-                self.queue_list.takeItem(0)
-            for index in range(self.queue_list.count()):
-                item = self.queue_list.item(index)
-                item.setText(f"{index + 1}. " + item.text().split(". ", 1)[1])
-            self.queue_count_label.setText(f"{len(self._queue_items)} mục")
-            self._set_busy(False, f"Đã lưu MP3 · {Path(path).name}")
+            self._active_queue_item = None
+            self._set_busy(False, f"Đã lưu mục hàng chờ · {Path(path).name}")
             self._start_queue_item()
             return
         self._set_busy(False, f"Đã lưu MP3 · {path}")
+        if self._queue_items:
+            self._queue_running = True
+            self._start_queue_item()
 
     def _play_result(self) -> None:
         if not hasattr(self, "player"):
