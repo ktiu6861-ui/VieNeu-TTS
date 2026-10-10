@@ -236,8 +236,8 @@ class EngineWorker(QObject):
         temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         temporary.replace(self.voice_index)
 
-    @Slot(str, str, str)
-    def generate(self, text: str, voice_id: str, output_dir: str) -> None:
+    @Slot(str, str, str, str)
+    def generate(self, text: str, voice_id: str, output_dir: str, file_name: str) -> None:
         output_files: list[Path] = []
         try:
             normalized_text = prepare_tts_text(text)
@@ -249,8 +249,17 @@ class EngineWorker(QObject):
             audio = self.tts.infer(normalized_text, voice=voice_id, max_chars=120)
             target_dir = Path(output_dir)
             target_dir.mkdir(parents=True, exist_ok=True)
-            stem = f"giong-viet-{datetime.now():%Y%m%d-%H%M%S-%f}"
+            stem = Path(file_name).name.strip() if file_name.strip() else ""
+            if stem.lower().endswith(".mp3"):
+                stem = stem[:-4]
+            if not stem:
+                stem = f"giong-viet-{datetime.now():%Y%m%d-%H%M%S-%f}"
+            if any(char in stem for char in '<>:"/\\|?*') or stem in {".", ".."}:
+                raise ValueError("Tên file không hợp lệ. Hãy bỏ các ký tự \\ / : * ? \" < > |.")
             mp3_output = target_dir / f"{stem}.mp3"
+            if mp3_output.exists():
+                stem = f"{stem}-{datetime.now():%Y%m%d-%H%M%S-%f}"
+                mp3_output = target_dir / f"{stem}.mp3"
             output_files.append(mp3_output)
             _save_mp3(audio, mp3_output)
             self.generated.emit(str(mp3_output))
@@ -328,7 +337,7 @@ class EngineWorker(QObject):
 
 
 class MainWindow(QMainWindow):
-    generate_requested = Signal(str, str, str)
+    generate_requested = Signal(str, str, str, str)
     add_voice_requested = Signal(str, str, bool)
     remove_voice_requested = Signal(str)
 
@@ -496,12 +505,21 @@ class MainWindow(QMainWindow):
         output_row = QHBoxLayout()
         output_row.addWidget(QLabel("THƯ MỤC LƯU"))
         self.output_path_edit = QLineEdit(str(self.output_dir))
-        self.output_path_edit.setReadOnly(True)
+        self.output_path_edit.setPlaceholderText("Nhập đường dẫn thư mục lưu audio")
+        self.output_path_edit.editingFinished.connect(self._apply_output_dir_edit)
         output_row.addWidget(self.output_path_edit, 1)
         self.choose_output_button = QPushButton("Chọn thư mục lưu")
         self.choose_output_button.clicked.connect(self._choose_output_dir)
         output_row.addWidget(self.choose_output_button)
         layout.addLayout(output_row)
+
+        filename_row = QHBoxLayout()
+        filename_row.addWidget(QLabel("TÊN FILE MP3"))
+        self.output_name_edit = QLineEdit()
+        self.output_name_edit.setPlaceholderText("Nhập tên file trước khi tạo audio (không cần .mp3)")
+        self.output_name_edit.setToolTip("Bỏ trống để dùng tên file tự động.")
+        filename_row.addWidget(self.output_name_edit, 1)
+        layout.addLayout(filename_row)
 
         actions = QHBoxLayout()
         self.status = QLabel("Đang tải model lần đầu có thể mất vài phút.")
@@ -781,7 +799,10 @@ class MainWindow(QMainWindow):
         self.render_progress_label.setText("Đang chờ tiến trình render · ETA ước tính…")
         self.render_timer.start()
         self._set_busy(True, "Đang tạo giọng trên máy này…")
-        self.generate_requested.emit(text, voice_id, str(self.output_dir))
+        file_name = "" if self._queue_running else self.output_name_edit.text().strip()
+        self.generate_requested.emit(text, voice_id, str(self.output_dir), file_name)
+        if file_name:
+            self.output_name_edit.clear()
 
     def _add_to_queue(self) -> None:
         text = self.text_input.toPlainText().strip()
@@ -950,8 +971,26 @@ class MainWindow(QMainWindow):
         )
         if not chosen:
             return
-        self.output_dir = Path(chosen).resolve()
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.output_path_edit.setText(chosen)
+        self._apply_output_dir_edit()
+
+    def _apply_output_dir_edit(self) -> None:
+        path_text = self.output_path_edit.text().strip()
+        if not path_text:
+            self.output_path_edit.setText(str(self.output_dir))
+            return
+        try:
+            output_dir = Path(path_text).expanduser().resolve()
+            output_dir.mkdir(parents=True, exist_ok=True)
+        except (OSError, ValueError) as exc:
+            self.output_path_edit.setText(str(self.output_dir))
+            QMessageBox.warning(
+                self,
+                "Không thể dùng thư mục lưu",
+                f"Không thể tạo hoặc lưu đường dẫn này. Hãy kiểm tra lại đường dẫn và quyền truy cập.\n\n{exc}",
+            )
+            return
+        self.output_dir = output_dir
         self.output_path_edit.setText(str(self.output_dir))
         try:
             self._write_settings({"output_dir": str(self.output_dir)})
@@ -959,7 +998,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self,
                 "Không thể ghi cài đặt",
-                f"Thư mục đã chọn dùng được trong phiên này nhưng không thể ghi nhớ cho lần sau.\n\n{exc}",
+                f"Thư mục đã nhập dùng được trong phiên này nhưng không thể ghi nhớ cho lần sau.\n\n{exc}",
             )
 
     def _open_output_dir(self) -> None:
@@ -1125,6 +1164,7 @@ def main() -> int:
                 "Xin chao, day la ban kiem tra offline.",
                 voices[0][1],
                 str(smoke_output_dir),
+                "",
             )
             if errors or not generated:
                 print("OFFLINE_SMOKE_FAILED:", errors or ["No audio was generated."])

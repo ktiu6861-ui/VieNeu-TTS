@@ -10,7 +10,7 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
-APP_VERSION = "0.1.2"
+APP_VERSION = "0.1.3"
 GITHUB_REPOSITORY = "ktiu6861-ui/VieNeu-TTS"
 UPDATE_ARCHIVE = "GiongViet-update-windows-x64.zip"
 UPDATE_MANIFEST = "GiongViet-update-manifest.json"
