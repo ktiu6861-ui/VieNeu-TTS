@@ -607,21 +607,18 @@ class MainWindow(QMainWindow):
         queue_folder_label = QLabel("THƯ MỤC LƯU HÀNG CHỜ")
         queue_folder_label.setObjectName("queueTitle")
         side.addWidget(queue_folder_label)
-        queue_folder_row = QHBoxLayout()
-        queue_folder_row.setSpacing(4)
         self.queue_output_path_edit = QLineEdit(str(self.queue_output_dir))
         self.queue_output_path_edit.setFixedHeight(30)
         self.queue_output_path_edit.setPlaceholderText("Đường dẫn lưu audio hàng chờ")
         self.queue_output_path_edit.setToolTip(str(self.queue_output_dir))
-        self.queue_output_path_edit.setCursorPosition(len(str(self.queue_output_dir)))
+        self.queue_output_path_edit.setCursorPosition(0)
         self.queue_output_path_edit.editingFinished.connect(self._apply_queue_output_dir_edit)
-        queue_folder_row.addWidget(self.queue_output_path_edit, 1)
-        self.choose_queue_output_button = QPushButton("Chọn")
+        side.addWidget(self.queue_output_path_edit)
+        self.choose_queue_output_button = QPushButton("Chọn thư mục lưu hàng chờ")
         self.choose_queue_output_button.setFixedHeight(30)
         self.choose_queue_output_button.setToolTip("Chọn thư mục lưu riêng cho hàng chờ")
         self.choose_queue_output_button.clicked.connect(self._choose_queue_output_dir)
-        queue_folder_row.addWidget(self.choose_queue_output_button)
-        side.addLayout(queue_folder_row)
+        side.addWidget(self.choose_queue_output_button)
 
         self.add_queue_content_button = QPushButton("Chọn nội dung")
         self.add_queue_content_button.setObjectName("queueAction")
@@ -1127,12 +1124,14 @@ class MainWindow(QMainWindow):
         path_text = self.queue_output_path_edit.text().strip()
         if not path_text:
             self.queue_output_path_edit.setText(str(self.queue_output_dir))
+            self.queue_output_path_edit.setCursorPosition(0)
             return
         try:
             output_dir = Path(path_text).expanduser().resolve()
             output_dir.mkdir(parents=True, exist_ok=True)
         except (OSError, ValueError) as exc:
             self.queue_output_path_edit.setText(str(self.queue_output_dir))
+            self.queue_output_path_edit.setCursorPosition(0)
             QMessageBox.warning(
                 self,
                 "Không thể dùng thư mục lưu hàng chờ",
@@ -1142,6 +1141,7 @@ class MainWindow(QMainWindow):
         self.queue_output_dir = output_dir
         self.queue_output_path_edit.setText(str(output_dir))
         self.queue_output_path_edit.setToolTip(str(output_dir))
+        self.queue_output_path_edit.setCursorPosition(0)
         try:
             self._write_settings({"queue_output_dir": str(output_dir)})
         except OSError as exc:
