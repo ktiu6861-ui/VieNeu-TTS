@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import os
 import re
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
-APP_VERSION = "0.1.6"
+APP_VERSION = "0.1.7"
 GITHUB_REPOSITORY = "ktiu6861-ui/VieNeu-TTS"
 UPDATE_ARCHIVE = "GiongViet-update-windows-x64.zip"
 UPDATE_MANIFEST = "GiongViet-update-manifest.json"
@@ -84,22 +87,96 @@ def download_latest_update(progress=None) -> tuple[str, str]:
 
     task_dir = Path(tempfile.mkdtemp(prefix="giong-viet-update-"))
     archive_path = task_dir / archive_name
-    digest = hashlib.sha256()
     total = int(assets[archive_name].get("size", 0))
-    downloaded = 0
     try:
-        with _request(assets[archive_name]["browser_download_url"]) as response:
-            with archive_path.open("wb") as target:
-                while chunk := response.read(1024 * 1024):
-                    target.write(chunk)
-                    digest.update(chunk)
-                    downloaded += len(chunk)
-                    if progress and total:
-                        progress(min(99, downloaded * 100 // total))
+        asset_url = assets[archive_name]["browser_download_url"]
+        last_error = None
+        for attempt in range(5):
+            downloaded = archive_path.stat().st_size if archive_path.exists() else 0
+            if total and downloaded > total:
+                archive_path.unlink(missing_ok=True)
+                downloaded = 0
+            elif total and downloaded == total:
+                break
+            request = urllib.request.Request(asset_url, headers={"User-Agent": "GiongViet-Updater"})
+            if downloaded:
+                request.add_header("Range", f"bytes={downloaded}-")
+            try:
+                with urllib.request.urlopen(request, timeout=60) as response:
+                    status_code = getattr(response, "status", response.getcode())
+                    content_range = response.headers.get("Content-Range", "")
+                    range_match = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+|\*)", content_range)
+                    if downloaded and (
+                        status_code != 206
+                        or not range_match
+                        or int(range_match.group(1)) != downloaded
+                    ):
+                        archive_path.unlink(missing_ok=True)
+                        downloaded = 0
+                        if status_code == 206:
+                            raise OSError("Update server returned an invalid resume range.")
+
+                    if not total:
+                        if range_match and range_match.group(3) != "*":
+                            total = int(range_match.group(3))
+                        else:
+                            total = int(response.headers.get("Content-Length", 0)) + downloaded
+
+                    digest = hashlib.sha256()
+                    mode = "ab" if downloaded and status_code == 206 else "wb"
+                    if mode == "ab":
+                        with archive_path.open("rb") as existing:
+                            while existing_chunk := existing.read(1024 * 1024):
+                                digest.update(existing_chunk)
+                    else:
+                        downloaded = 0
+
+                    read_error = None
+                    with archive_path.open(mode) as target:
+                        while True:
+                            try:
+                                chunk = response.read(1024 * 1024)
+                            except (OSError, http.client.HTTPException) as exc:
+                                read_error = exc
+                                break
+                            if not chunk:
+                                break
+                            target.write(chunk)
+                            digest.update(chunk)
+                            downloaded += len(chunk)
+                            if progress and total:
+                                progress(min(99, downloaded * 100 // total))
+
+                    if read_error:
+                        last_error = read_error
+                    elif total and downloaded < total:
+                        last_error = ConnectionError(
+                            f"Update download ended early ({downloaded} of {total} bytes)."
+                        )
+                    elif total and downloaded > total:
+                        archive_path.unlink(missing_ok=True)
+                        last_error = ConnectionError("Update download exceeded the expected file size.")
+                    else:
+                        break
+            except InterruptedError:
+                raise
+            except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException, OSError) as exc:
+                last_error = exc
+
+            if attempt < 4:
+                if progress and total and archive_path.exists():
+                    progress(min(99, archive_path.stat().st_size * 100 // total))
+                time.sleep(min(2 ** attempt, 8))
+        else:
+            raise RuntimeError(f"Không thể tải tiếp gói cập nhật sau nhiều lần thử: {last_error}") from last_error
     except Exception:
         archive_path.unlink(missing_ok=True)
         raise
 
+    digest = hashlib.sha256()
+    with archive_path.open("rb") as downloaded_file:
+        while chunk := downloaded_file.read(1024 * 1024):
+            digest.update(chunk)
     if digest.hexdigest() != expected_hash:
         archive_path.unlink(missing_ok=True)
         raise ValueError("Mã SHA-256 của gói cập nhật không khớp; gói tải về đã bị xóa.")

@@ -11,8 +11,8 @@ from pathlib import Path
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--bundle", type=Path)
-    parser.add_argument("--base-bundle", type=Path)
-    parser.add_argument("--base-version")
+    parser.add_argument("--base-bundle", type=Path, action="append")
+    parser.add_argument("--base-version", action="append")
     args = parser.parse_args()
     project_root = Path(__file__).resolve().parent.parent
     bundle = (args.bundle or (project_root / "dist" / "offline-build" / "GiongViet")).resolve()
@@ -52,11 +52,10 @@ def main() -> int:
         "sha256": digest.hexdigest(),
     }
     if args.base_bundle or args.base_version:
-        if not args.base_bundle or not args.base_version:
-            raise ValueError("--base-bundle and --base-version must be provided together")
-        base_bundle = args.base_bundle.resolve()
-        if not (base_bundle / "GiongViet.exe").is_file():
-            raise FileNotFoundError(f"Base portable executable is missing: {base_bundle / 'GiongViet.exe'}")
+        base_bundles = args.base_bundle or []
+        base_versions = args.base_version or []
+        if not base_bundles or len(base_bundles) != len(base_versions):
+            raise ValueError("Provide matching --base-bundle and --base-version arguments")
 
         def eligible_files(folder: Path) -> dict[Path, Path]:
             result = {}
@@ -70,11 +69,17 @@ def main() -> int:
             return result
 
         current_files = eligible_files(bundle)
-        base_files = eligible_files(base_bundle)
-        removed = set(base_files) - set(current_files)
-        if removed:
-            print(f"DELTA_SKIPPED: {len(removed)} removed files require a full update")
-        else:
+        deltas = {}
+        for base_bundle_path, base_version in zip(base_bundles, base_versions):
+            base_bundle = base_bundle_path.resolve()
+            if not (base_bundle / "GiongViet.exe").is_file():
+                raise FileNotFoundError(f"Base portable executable is missing: {base_bundle / 'GiongViet.exe'}")
+            base_files = eligible_files(base_bundle)
+            removed = set(base_files) - set(current_files)
+            if removed:
+                print(f"DELTA_SKIPPED: {len(removed)} removed files from {base_version} require a full update")
+                continue
+
             changed = []
             for relative, current in current_files.items():
                 previous = base_files.get(relative)
@@ -82,7 +87,7 @@ def main() -> int:
                     changed.append((relative, current))
                 elif _sha256(current) != _sha256(previous):
                     changed.append((relative, current))
-            delta_name = f"GiongViet-update-delta-{args.base_version}.zip"
+            delta_name = f"GiongViet-update-delta-{base_version}.zip"
             delta_path = archive.parent / delta_name
             delta_tmp = delta_path.with_suffix(".zip.tmp")
             with zipfile.ZipFile(
@@ -91,16 +96,16 @@ def main() -> int:
                 for relative, source in changed:
                     package.write(source, Path("GiongViet") / relative)
             delta_tmp.replace(delta_path)
-            manifest["deltas"] = {
-                args.base_version: {
-                    "archive": delta_name,
-                    "sha256": _sha256(delta_path),
-                }
+            deltas[base_version] = {
+                "archive": delta_name,
+                "sha256": _sha256(delta_path),
             }
             print(
                 f"DELTA_PACKAGE_OK: {delta_path} ({delta_path.stat().st_size / (1024 ** 2):.1f} MiB, "
-                f"{len(changed)} changed files from {args.base_version})"
+                f"{len(changed)} changed files from {base_version})"
             )
+        if deltas:
+            manifest["deltas"] = deltas
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     print(f"UPDATE_PACKAGE_OK: {archive} ({archive.stat().st_size / (1024 ** 3):.2f} GiB)")
     print(f"UPDATE_MANIFEST_OK: {manifest_path}")
