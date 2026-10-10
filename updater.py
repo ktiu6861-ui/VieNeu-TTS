@@ -13,7 +13,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-APP_VERSION = "0.1.7"
+APP_VERSION = "0.1.8"
 GITHUB_REPOSITORY = "ktiu6861-ui/VieNeu-TTS"
 UPDATE_ARCHIVE = "GiongViet-update-windows-x64.zip"
 UPDATE_MANIFEST = "GiongViet-update-manifest.json"
@@ -202,8 +202,22 @@ $ErrorActionPreference = 'Stop'
 $parent = Split-Path -Parent $InstallDir
 $task = Join-Path $parent ('.GiongViet-update-' + [guid]::NewGuid().ToString('N'))
 $backup = $InstallDir + '.previous-' + [guid]::NewGuid().ToString('N')
+$readyMarker = Join-Path $InstallDir '.GiongViet-update-ready'
 $swapped = $false
 $changes = [System.Collections.Generic.List[object]]::new()
+function Start-UpdatedApp {
+    New-Item -ItemType File -Path $readyMarker -Force | Out-Null
+    $env:GIONGVIET_UPDATE_READY_MARKER = $readyMarker
+    $started = Start-Process -FilePath $Executable -WorkingDirectory $InstallDir -PassThru
+    Remove-Item Env:\GIONGVIET_UPDATE_READY_MARKER -ErrorAction SilentlyContinue
+    $deadline = (Get-Date).AddMinutes(5)
+    while ((Test-Path -LiteralPath $readyMarker) -and (Get-Date) -lt $deadline) {
+        $started.Refresh()
+        if ($started.HasExited) { break }
+        Start-Sleep -Milliseconds 500
+    }
+    Remove-Item -LiteralPath $readyMarker -Force -ErrorAction SilentlyContinue
+}
 try {
     while (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) { Start-Sleep -Seconds 1 }
     New-Item -ItemType Directory -Path $task | Out-Null
@@ -232,7 +246,7 @@ try {
             }
             Move-Item -LiteralPath $file.FullName -Destination $target
         }
-        Start-Process -FilePath $Executable
+        Start-UpdatedApp
         Remove-Item -LiteralPath $task -Recurse -Force
         Remove-Item -LiteralPath $Archive -Force
         exit 0
@@ -248,11 +262,12 @@ try {
     }
     Move-Item -LiteralPath $payload -Destination $InstallDir
     $swapped = $true
-    Start-Process -FilePath $Executable
+    Start-UpdatedApp
     Remove-Item -LiteralPath $backup -Recurse -Force
     Remove-Item -LiteralPath $task -Recurse -Force
     Remove-Item -LiteralPath $Archive -Force
 } catch {
+    Remove-Item -LiteralPath $readyMarker -Force -ErrorAction SilentlyContinue
     if ($Delta) {
         for ($i = $changes.Count - 1; $i -ge 0; $i--) {
             $change = $changes[$i]

@@ -161,6 +161,7 @@ def app_data_dir() -> Path:
 class EngineWorker(QObject):
     ready = Signal(list)
     failed = Signal(str)
+    initializing = Signal(str)
     generated = Signal(str)
     voice_added = Signal(str, list)
     voice_removed = Signal(str, list)
@@ -191,6 +192,7 @@ class EngineWorker(QObject):
     @Slot()
     def initialize(self) -> None:
         try:
+            self.initializing.emit("Đang khởi động engine ONNX…")
             _optimize_runtime()
             runtime_dirs = [Path(sys.modules["PySide6.QtCore"].__file__).resolve().parent]
             if getattr(sys, "frozen", False):
@@ -214,15 +216,21 @@ class EngineWorker(QObject):
                 "threads": _onnx_threads(),
             }
             try:
+                self.initializing.emit("Đang nạp model giọng đọc…")
                 self.tts = Vieneu(**engine_options, precision="int8")
                 self.precision = "INT8"
             except Exception as int8_error:
                 logging.warning("VieNeu INT8 graph unavailable; retrying with FP32: %s", int8_error)
+                self.initializing.emit("Đang thử nạp model giọng đọc ở chế độ tương thích…")
                 self.tts = Vieneu(**engine_options, precision="fp32")
                 self.precision = "FP32"
-            for item in self._read_index():
+            custom_voices = self._read_index()
+            for index, item in enumerate(custom_voices, start=1):
                 audio = self.voice_dir / item["file"]
                 if audio.is_file():
+                    self.initializing.emit(
+                        f"Đang nạp giọng clone {index}/{len(custom_voices)}: {item['name']}…"
+                    )
                     self.tts.add_voice(
                         item["name"],
                         str(audio),
@@ -371,7 +379,7 @@ class MainWindow(QMainWindow):
         self.resize(1120, 760)
         self._build_ui()
         self._connect_engine()
-        self._set_busy(True, "")
+        self._set_busy(True, "Đang khởi động engine ONNX…")
         self.thread.start()
         QTimer.singleShot(2500, lambda: self._check_for_updates(automatic=True))
 
@@ -661,6 +669,7 @@ class MainWindow(QMainWindow):
         self.worker = EngineWorker(self.data_dir)
         self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.initialize)
+        self.worker.initializing.connect(self._engine_initializing)
         self.worker.ready.connect(self._engine_ready)
         self.worker.failed.connect(self._engine_failed)
         self.worker.generated.connect(self._generated)
@@ -757,6 +766,7 @@ class MainWindow(QMainWindow):
         self.nav_voices.style().polish(self.nav_voices)
 
     def _engine_ready(self, voices: list) -> None:
+        self._clear_update_ready_marker()
         self.engine_ready = True
         self.voice_combo.clear()
         self.voice_names = {voice_id for _, voice_id in voices}
@@ -789,6 +799,7 @@ class MainWindow(QMainWindow):
         self._set_busy(False, f"Đã xóa giọng “{name}”.")
 
     def _engine_failed(self, message: str) -> None:
+        self._clear_update_ready_marker()
         self._finish_render_progress(success=False)
         self._queue_running = False
         if self.engine_ready:
@@ -799,6 +810,18 @@ class MainWindow(QMainWindow):
         self._set_busy(False, "Engine chưa sẵn sàng.")
         self.engine_badge.setText("●  CẦN KIỂM TRA")
         QMessageBox.critical(self, "VieNeu chưa khởi động", message)
+
+    def _engine_initializing(self, message: str) -> None:
+        self.status.setText(message)
+
+    @staticmethod
+    def _clear_update_ready_marker() -> None:
+        marker = os.environ.pop("GIONGVIET_UPDATE_READY_MARKER", "")
+        if marker:
+            try:
+                Path(marker).unlink(missing_ok=True)
+            except OSError:
+                logging.warning("Could not clear updater startup marker: %s", marker, exc_info=True)
 
     def _set_busy(self, busy: bool, message: str) -> None:
         ready = self.engine_ready and self.voice_combo.count() > 0
