@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QStandardPaths, Qt, QThread, Signal, Slot, QUrl, QTimer
-from PySide6.QtGui import QDesktopServices, QFont
+from PySide6.QtGui import QDesktopServices, QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -601,21 +601,40 @@ class MainWindow(QMainWindow):
 
         self.queue_list = QListWidget()
         self.queue_list.setObjectName("queueList")
-        self.queue_list.setMaximumHeight(120)
+        self.queue_list.setFixedHeight(120)
+        self.queue_list.hide()
         side.addWidget(self.queue_list)
+
+        self.queue_empty_state = QFrame()
+        self.queue_empty_state.setObjectName("queueEmptyState")
+        self.queue_empty_state.setFixedHeight(120)
+        empty_layout = QVBoxLayout(self.queue_empty_state)
+        empty_layout.setContentsMargins(14, 12, 14, 12)
+        empty_layout.addStretch(1)
+        empty_title = QLabel("Hàng chờ đang trống")
+        empty_title.setObjectName("queueEmptyTitle")
+        empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_layout.addWidget(empty_title)
+        empty_hint = QLabel("Thêm nội dung hoặc file TXT sẽ đọc tiếp theo.")
+        empty_hint.setObjectName("queueEmptyHint")
+        empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_hint.setWordWrap(True)
+        empty_layout.addWidget(empty_hint)
+        empty_layout.addStretch(1)
+        side.addWidget(self.queue_empty_state)
 
         queue_folder_label = QLabel("THƯ MỤC LƯU HÀNG CHỜ")
         queue_folder_label.setObjectName("queueTitle")
         side.addWidget(queue_folder_label)
-        self.queue_output_path_edit = QLineEdit(str(self.queue_output_dir))
-        self.queue_output_path_edit.setFixedHeight(30)
-        self.queue_output_path_edit.setPlaceholderText("Đường dẫn lưu audio hàng chờ")
-        self.queue_output_path_edit.setToolTip(str(self.queue_output_dir))
-        self.queue_output_path_edit.setCursorPosition(0)
-        self.queue_output_path_edit.editingFinished.connect(self._apply_queue_output_dir_edit)
-        side.addWidget(self.queue_output_path_edit)
-        self.choose_queue_output_button = QPushButton("Chọn thư mục lưu hàng chờ")
-        self.choose_queue_output_button.setFixedHeight(30)
+        self.queue_output_path_label = QLabel(str(self.queue_output_dir))
+        self.queue_output_path_label.setObjectName("queuePath")
+        self.queue_output_path_label.setFixedHeight(36)
+        self.queue_output_path_label.setToolTip(str(self.queue_output_dir))
+        side.addWidget(self.queue_output_path_label)
+        QTimer.singleShot(0, self._refresh_queue_output_path_label)
+        self.choose_queue_output_button = QPushButton("Chọn thư mục lưu…")
+        self.choose_queue_output_button.setObjectName("queueFolderButton")
+        self.choose_queue_output_button.setFixedHeight(36)
         self.choose_queue_output_button.setToolTip("Chọn thư mục lưu riêng cho hàng chờ")
         self.choose_queue_output_button.clicked.connect(self._choose_queue_output_dir)
         side.addWidget(self.choose_queue_output_button)
@@ -934,6 +953,8 @@ class MainWindow(QMainWindow):
             return
         item = (text, str(voice_id), source_name, output_name)
         self._queue_items.append(item)
+        self.queue_empty_state.hide()
+        self.queue_list.show()
         self.queue_list.addItem(self._format_queue_item(len(self._queue_items), item))
         self.queue_count_label.setText(f"{len(self._queue_items)} mục tiếp theo")
         self.run_queue_button.setEnabled(
@@ -949,6 +970,9 @@ class MainWindow(QMainWindow):
         return f"{index}. [{voice_id}] {source_name}: {preview}"
 
     def _renumber_queue(self) -> None:
+        has_items = bool(self._queue_items)
+        self.queue_list.setVisible(has_items)
+        self.queue_empty_state.setVisible(not has_items)
         for index, item in enumerate(self._queue_items, start=1):
             self.queue_list.item(index - 1).setText(self._format_queue_item(index, item))
         self.queue_count_label.setText(f"{len(self._queue_items)} mục tiếp theo")
@@ -1117,21 +1141,10 @@ class MainWindow(QMainWindow):
         )
         if not chosen:
             return
-        self.queue_output_path_edit.setText(chosen)
-        self._apply_queue_output_dir_edit()
-
-    def _apply_queue_output_dir_edit(self) -> None:
-        path_text = self.queue_output_path_edit.text().strip()
-        if not path_text:
-            self.queue_output_path_edit.setText(str(self.queue_output_dir))
-            self.queue_output_path_edit.setCursorPosition(0)
-            return
         try:
-            output_dir = Path(path_text).expanduser().resolve()
+            output_dir = Path(chosen).expanduser().resolve()
             output_dir.mkdir(parents=True, exist_ok=True)
         except (OSError, ValueError) as exc:
-            self.queue_output_path_edit.setText(str(self.queue_output_dir))
-            self.queue_output_path_edit.setCursorPosition(0)
             QMessageBox.warning(
                 self,
                 "Không thể dùng thư mục lưu hàng chờ",
@@ -1139,9 +1152,8 @@ class MainWindow(QMainWindow):
             )
             return
         self.queue_output_dir = output_dir
-        self.queue_output_path_edit.setText(str(output_dir))
-        self.queue_output_path_edit.setToolTip(str(output_dir))
-        self.queue_output_path_edit.setCursorPosition(0)
+        self.queue_output_path_label.setToolTip(str(output_dir))
+        self._refresh_queue_output_path_label()
         try:
             self._write_settings({"queue_output_dir": str(output_dir)})
         except OSError as exc:
@@ -1150,6 +1162,14 @@ class MainWindow(QMainWindow):
                 "Không thể ghi cài đặt",
                 f"Thư mục đã dùng được trong phiên này nhưng không thể ghi nhớ cho lần sau.\n\n{exc}",
             )
+
+    def _refresh_queue_output_path_label(self) -> None:
+        full_path = str(self.queue_output_dir)
+        available_width = max(80, self.queue_output_path_label.contentsRect().width() - 20)
+        metrics = QFontMetrics(self.queue_output_path_label.font())
+        self.queue_output_path_label.setText(
+            metrics.elidedText(full_path, Qt.TextElideMode.ElideMiddle, available_width)
+        )
 
     def _choose_output_dir(self) -> None:
         chosen = QFileDialog.getExistingDirectory(
@@ -1297,10 +1317,17 @@ QLabel#ownership { color: #89968e; font-size: 10px; padding-top: 3px; }
 QLabel#sectionLabel { color: #66766c; font-size: 11px; font-weight: 800; }
 QLabel#queueTitle { color: #d8e5dc; font-size: 10px; font-weight: 800; }
 QLabel#queueCount { color: #9eb5a6; font-size: 9px; }
-QListWidget#queueList { background: #203329; color: #edf4ee; border: 1px solid #354b3e; border-radius: 6px; padding: 3px; font-size: 10px; }
-QPushButton#queueAction, QPushButton#queuePrimary { text-align: left; font-size: 10px; padding: 7px 8px; }
+QFrame#queueEmptyState { background: #203329; border: 1px solid #354b3e; border-radius: 9px; }
+QLabel#queueEmptyTitle { color: #e6eee8; font-size: 12px; font-weight: 700; }
+QLabel#queueEmptyHint { color: #9eb5a6; font-size: 10px; font-weight: 400; }
+QLabel#queuePath { background: #203329; color: #dce8df; border: 1px solid #354b3e; border-radius: 8px; padding: 0 10px; font-size: 11px; }
+QListWidget#queueList { background: #203329; color: #edf4ee; border: 1px solid #354b3e; border-radius: 9px; padding: 5px; font-size: 11px; }
+QListWidget#queueList::item { padding: 7px 5px; border-bottom: 1px solid #354b3e; }
+QPushButton#queueAction, QPushButton#queuePrimary, QPushButton#queueFolderButton { text-align: left; font-size: 11px; padding: 8px 10px; }
 QPushButton#queueAction { background: #24382d; color: #dce8df; border-color: #3a5143; }
 QPushButton#queuePrimary { background: #dd633f; color: #ffffff; border: none; }
+QPushButton#queueFolderButton { background: #2b4135; color: #e9f1eb; border-color: #45604e; }
+QPushButton#queueFolderButton:hover { background: #354f40; border-color: #6d9179; }
 QComboBox, QLineEdit { background: #ffffff; border: 1px solid #d8e0d9; border-radius: 7px; padding: 9px 11px; color: #213028; }
 QComboBox::drop-down { border: none; width: 28px; }
 QPlainTextEdit { background: #ffffff; border: 1px solid #d8e0d9; border-radius: 8px; padding: 14px; color: #26352d; selection-background-color: #b6d5bf; font-size: 15px; }
